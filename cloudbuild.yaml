@@ -53,7 +53,9 @@ steps:
         pip install --quiet ".[dev,gcp,metric]"
         python -m pytest -q tests
 
-  # 3) Build. Contexto = raíz del repo (".") para que el Dockerfile pueda COPIAR libs/ y core/.
+  # 3) Build. Contexto = raíz del repo (".") para que el Dockerfile pueda COPIAR libs/.
+  #    Las variables de BASH ($$CTX, $$IMAGE) se escapan con `$$` para que Cloud Build NO
+  #    intente sustituirlas (solo sustituye built-ins y las que empiezan por `_`).
   - id: build
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -62,7 +64,7 @@ steps:
       - |
         set -euo pipefail
         CTX="$(cat /workspace/ctx_dir)"; IMAGE="$(cat /workspace/image_uri)"
-        docker build -f "${CTX}/Dockerfile" -t "${IMAGE}" .
+        docker build -f "$${CTX}/Dockerfile" -t "$${IMAGE}" .
 
   # 4) Push (solo en push a main; en PR se queda en test+build).
   - id: push
@@ -99,17 +101,17 @@ steps:
         set -euo pipefail
         if [ "${_DEPLOY}" != "true" ]; then echo "PR (_DEPLOY=false): no se despliega"; exit 0; fi
         KIND="$(cat /workspace/kind)"; IMAGE="$(cat /workspace/image_uri)"
-        case "${KIND}" in
+        case "$${KIND}" in
           service)
             gcloud run services update "run-dev-${_SERVICE}-usc1" \
-              --image="${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
+              --image="$${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
           job)
             gcloud run jobs update "job-dev-${_SERVICE}-usc1" \
-              --image="${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
+              --image="$${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
           trainer)
             PIN="$(cat trainer/lanetr_pin.txt)"
             gcloud storage cp /workspace/config_schema.json \
-              "gs://${_DATASETS_BUCKET}/_model/lanetr@${PIN}/config_schema.json" ;;
+              "gs://${_DATASETS_BUCKET}/_model/lanetr@$${PIN}/config_schema.json" ;;
         esac
 
 timeout: 2400s

@@ -5,35 +5,35 @@ from __future__ import annotations
 import pytest
 
 from vroad_mlt.datalake import queries as dl
-from vroad_mlt.datalake.queries import DatalakeError, build_images_query, build_where, lines_uri_for_image
+from vroad_mlt.datalake.queries import DatalakeError, build_images_query, build_where, label_uri_for_image
 
 DLP = "vr-prj-prod-data-v1"
 
 
-# ------------------------------------------------------- lines_uri_for_image
+# ------------------------------------------------------- label_uri_for_image
 
 @pytest.mark.parametrize(
     "image_uri, expected",
     [
-        ("gs://bkt-prod-public-usc1/culane/images/000001.jpg",
-         "gs://bkt-prod-public-usc1/culane/lines/000001.lines.json"),
+        ("gs://bkt-prod-public-usc1/culane/test/night/images/clip/00000.jpg",
+         "gs://bkt-prod-public-usc1/culane/test/night/label/clip/00000.lines.json"),
         ("gs://bkt-prod-user-usc1/usr_a/sess_1/images/42.jpeg",
-         "gs://bkt-prod-user-usc1/usr_a/sess_1/lines/42.lines.json"),
-        ("gs://b/d/images/x.PNG", "gs://b/d/lines/x.lines.json"),
+         "gs://bkt-prod-user-usc1/usr_a/sess_1/label/42.lines.json"),
+        ("gs://b/d/images/x.PNG", "gs://b/d/label/x.lines.json"),
     ],
 )
-def test_lines_uri_for_image(image_uri, expected):
-    assert lines_uri_for_image(image_uri) == expected
+def test_label_uri_for_image(image_uri, expected):
+    assert label_uri_for_image(image_uri) == expected
 
 
-def test_lines_uri_requires_images_segment():
+def test_label_uri_requires_images_segment():
     with pytest.raises(DatalakeError, match="/images/"):
-        lines_uri_for_image("gs://b/d/pics/x.jpg")
+        label_uri_for_image("gs://b/d/pics/x.jpg")
 
 
-def test_lines_uri_requires_known_extension():
+def test_label_uri_requires_known_extension():
     with pytest.raises(DatalakeError, match="extensión"):
-        lines_uri_for_image("gs://b/images/x.bmp")
+        label_uri_for_image("gs://b/images/x.bmp")
 
 
 # ----------------------------------------------------------------- build_where
@@ -84,6 +84,13 @@ def test_images_query_user_with_filters_has_both_joins():
     sql, _ = build_images_query(DLP, "user", "user", "train", {"weather": "rain"})
     assert "tbl_classifications` c" in sql
     assert "tbl_label_review_status` r" in sql
+
+
+def test_images_query_limit_appended():
+    sql, _ = build_images_query(DLP, "public", "culane", "train", limit=20)
+    assert sql.rstrip().endswith("LIMIT 20")
+    sql2, _ = build_images_query(DLP, "public", "culane", "train")
+    assert "LIMIT" not in sql2
 
 
 # ----------------------------------------------- build_distinct_values_query

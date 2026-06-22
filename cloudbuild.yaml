@@ -1,7 +1,9 @@
 # cloudbuild.yaml — visualroad-ml-training
 # Build genérico para las 7 imágenes, parametrizado por:
 #   _SERVICE  -> qué imagen se construye
-#   _DEPLOY   -> "false" en PR (solo test+build) | "true" en push a main (test+build+push+deploy)
+#   _DEPLOY   -> controla SOLO el DEPLOY (false=PR no despliega | true=push a main despliega).
+#                La imagen se CONSTRUYE y se SUBE a Artifact Registry SIEMPRE (también en PR),
+#                así hay imagen disponible para probar el recurso.
 # El build corre como sa-cicd-deployer (se pasa con --service-account en el trigger).
 # Colocar este fichero como cloudbuild.yaml en la RAÍZ del repo.
 
@@ -50,6 +52,8 @@ steps:
       - -c
       - |
         set -euo pipefail
+        # libs de sistema para OpenCV (lo usa la métrica/test_metric); el resto son wheels.
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
         pip install --quiet ".[dev,gcp,metric]"
         python -m pytest -q tests
 
@@ -66,7 +70,9 @@ steps:
         CTX="$(cat /workspace/ctx_dir)"; IMAGE="$(cat /workspace/image_uri)"
         docker build -f "$${CTX}/Dockerfile" -t "$${IMAGE}" .
 
-  # 4) Push (solo en push a main; en PR se queda en test+build).
+  # 4) Push a Artifact Registry. SIEMPRE (también en PR): así hay imagen para probar el recurso.
+  #    Cloud Build configura solo las credenciales de AR para el builder de docker; la SA del
+  #    build (sa-cicd-deployer) tiene artifactregistry.writer sobre el repo ml-training.
   - id: push
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -74,7 +80,6 @@ steps:
       - -c
       - |
         set -euo pipefail
-        if [ "${_DEPLOY}" != "true" ]; then echo "PR (_DEPLOY=false): no se publica imagen"; exit 0; fi
         docker push "$(cat /workspace/image_uri)"
 
   # 5) Solo trainer: exporta config_schema.json del modelo pineado ejecutando la propia imagen.

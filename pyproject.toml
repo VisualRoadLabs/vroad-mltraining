@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vroad-mlt"
+version = "0.0.1"
+description = "Librerías comunes y módulos de VisualRoad ML Training (vroad-mltraining)."
+requires-python = ">=3.10"
+# El núcleo de libs/ es deliberadamente ligero (solo stdlib). Las dependencias
+# pesadas se añaden por extra cuando lleguen sus módulos:
+#   gcp     -> google-cloud-storage / google-cloud-bigquery (gcs, bq, locks)
+#   trainer -> torch + lanetr pineado por SHA (trainer, contract)
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Las libs que tocan GCP (gcs/bq/locks). Se instala donde haga falta.
+gcp = ["google-cloud-storage>=2.10", "google-cloud-bigquery>=3.11"]
+# La métrica de CULane (port fiel del F1 oficial == C++).
+# scipy>=1.13 para compatibilidad ABI con numpy 2.x.
+metric = ["numpy>=2", "scipy>=1.13", "opencv-python-headless"]
+
+[tool.setuptools.packages.find]
+where = ["libs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -34,7 +34,7 @@ __all__ = [
     "DL_CLASSIFICATIONS",
     "DL_REVIEW",
     "dl_fqn",
-    "lines_uri_for_image",
+    "label_uri_for_image",
     "build_where",
     "build_images_query",
     "build_distinct_values_query",
@@ -63,15 +63,14 @@ def dl_fqn(project: str, dataset_table: tuple[str, str]) -> str:
     return f"{project}.{dataset}.{table}"
 
 
-def lines_uri_for_image(image_uri: str) -> str:
-    """Deriva la ruta del `.lines.json` desde la de la imagen.
+def label_uri_for_image(image_uri: str) -> str:
+    """Deriva la ruta del `.lines.json` (carpeta `label/`) desde la de la imagen.
 
-    Convención del Data Lake (público y usuario): `.../images/<id>.jpg` ->
-    `.../lines/<id>.lines.json`.
+    Convención del Data Lake: `.../images/<...>.jpg` -> `.../label/<...>.lines.json`.
     """
     if "/images/" not in image_uri:
         raise DatalakeError(f"URI de imagen sin '/images/': {image_uri!r}")
-    base = image_uri.replace("/images/", "/lines/", 1)
+    base = image_uri.replace("/images/", "/label/", 1)
     low = base.lower()
     for ext in _IMAGE_EXTS:
         if low.endswith(ext):
@@ -98,6 +97,8 @@ def build_images_query(
     dataset: str,
     split: str,
     filters: Optional[Mapping[str, Any]] = None,
+    *,
+    limit: Optional[int] = None,
 ) -> tuple[str, dict[str, Any]]:
     """SELECT de las imágenes de un (source, dataset, split) con filtros opcionales.
 
@@ -105,6 +106,7 @@ def build_images_query(
     - Si `source == 'user'`: LEFT JOIN con `tbl_label_review_status`; se CONSERVAN las
       imágenes que NO están en revisión (bien anotadas) o cuyo `status='reviewed'`.
       Se descartan solo las que están en revisión y aún no son `reviewed`.
+    - `limit`: si se pasa, añade `LIMIT n` (para pruebas; evita descargar todo).
     Devuelve (sql, params). El `.lines.json` se deriva luego con `lines_uri_for_image`.
     """
     filters = dict(filters or {})
@@ -133,6 +135,8 @@ def build_images_query(
         + " WHERE " + " AND ".join(where)
         + " ORDER BY i.image_id"
     )
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
     return sql, params
 
 

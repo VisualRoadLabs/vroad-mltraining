@@ -1,0 +1,16 @@
+# Contexto de build = raíz del repo; excluimos lo que no va en ninguna imagen.
+.git
+.github
+.venv
+venv
+env
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.env
+docs
+*.md
+!SPEC.md

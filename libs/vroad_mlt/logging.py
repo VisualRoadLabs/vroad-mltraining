@@ -1,24 +1,23 @@
-"""vroad_mlt.logging — logging estructurado (JSON a stdout) + formato decimal.
+"""vroad_mlt.logging — logging legible en consola (`[LEVEL] ...`) o JSON en Cloud Run.
 
-Todos los jobs/servicios loguean igual: una línea JSON por evento en stdout, que
-Cloud Run y Vertex recogen y mandan a Cloud Logging. Cloud Logging reconoce los
-campos especiales `severity`, `message` y `time`; cualquier otro campo (p. ej.
-`run_id`, `epoch`, `step`) cae en `jsonPayload` y sirve para filtrar.
+Por defecto emite texto `[INFO] mensaje  clave=valor ...` (cómodo en local). En
+Cloud Run / Vertex (detectado por env, o `LOG_FORMAT=json`) emite una línea JSON por
+evento que Cloud Logging parsea (`severity`/`message`/`time` + el resto a `jsonPayload`).
 
 Además trae `fmt_decimal`: los `loss_*`/`lr` del `train.log` se quieren en DECIMAL,
-sin notación científica (p. ej. `1e-4` -> `0.0001`).
+sin notación científica (`1e-4` -> `0.0001`).
 
 Diseño:
-- Lógica pura (solo stdlib `logging`/`json`); no toca GCP.
-- `setup_logging()` una vez en el arranque; `get_logger(name, **contexto)` devuelve
-  un logger con contexto pegado (p. ej. `run_id`) que se mezcla en cada evento.
-- El contexto y los `extra` por llamada se combinan (no se pisan).
+- Solo stdlib; no toca GCP.
+- `setup_logging()` una vez al arrancar; `get_logger(name, **contexto)` pega contexto
+  (p. ej. `run_id`) que se mezcla con los `extra` de cada evento (no se pisan).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any, Optional, TextIO
@@ -26,6 +25,7 @@ from typing import Any, Optional, TextIO
 __all__ = [
     "SEVERITY",
     "JsonFormatter",
+    "TextFormatter",
     "setup_logging",
     "get_logger",
     "fmt_decimal",
@@ -67,6 +67,22 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+class TextFormatter(logging.Formatter):
+    """Formatea como `[LEVEL] mensaje  clave=valor ...` (legible en consola)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        out = f"[{record.levelname}] {record.getMessage()}"
+        extras = {
+            k: v for k, v in record.__dict__.items()
+            if k not in _RESERVED and not k.startswith("_")
+        }
+        if extras:
+            out += "  " + " ".join(f"{k}={v}" for k, v in extras.items())
+        if record.exc_info:
+            out += "\n" + self.formatException(record.exc_info)
+        return out
+
+
 class _ContextAdapter(logging.LoggerAdapter):
     """Pega un contexto fijo (p. ej. `run_id`) y lo mezcla con los `extra`."""
 
@@ -81,25 +97,40 @@ class _ContextAdapter(logging.LoggerAdapter):
         return _ContextAdapter(self.logger, {**(self.extra or {}), **more})
 
 
+def _resolve_fmt(fmt: Optional[str]) -> str:
+    if fmt:
+        return fmt.lower()
+    env = os.environ.get("LOG_FORMAT")
+    if env:
+        return env.lower()
+    # Cloud Run / Vertex ponen estas variables -> allí JSON (Cloud Logging lo parsea).
+    if os.environ.get("K_SERVICE") or os.environ.get("CLOUD_RUN_JOB") or os.environ.get("CLOUD_RUN_EXECUTION"):
+        return "json"
+    return "text"
+
+
 def setup_logging(
     level: int = logging.INFO,
     *,
+    fmt: Optional[str] = None,
     stream: Optional[TextIO] = None,
     force: bool = False,
 ) -> logging.Logger:
-    """Configura el logging estructurado a stdout. Idempotente.
+    """Configura el logging a stdout. Idempotente. Llamar una vez al arrancar.
 
-    Llamar una vez al arrancar el proceso. `force=True` reemplaza handlers
-    (útil en tests). `stream` permite redirigir (por defecto stdout).
+    `fmt`: 'text' (`[LEVEL] ...`, por defecto en local) o 'json' (Cloud Run). Si es
+    None se autodetecta (env `LOG_FORMAT`, o variables de Cloud Run). `force=True`
+    reemplaza handlers (tests).
     """
+    formatter = JsonFormatter() if _resolve_fmt(fmt) == "json" else TextFormatter()
     root = logging.getLogger()
     if force:
         for h in list(root.handlers):
             root.removeHandler(h)
-    if not any(getattr(h, "_vroad_json", False) for h in root.handlers):
+    if not any(getattr(h, "_vroad_handler", False) for h in root.handlers):
         handler = logging.StreamHandler(stream or sys.stdout)
-        handler.setFormatter(JsonFormatter())
-        handler._vroad_json = True  # type: ignore[attr-defined]
+        handler.setFormatter(formatter)
+        handler._vroad_handler = True  # type: ignore[attr-defined]
         root.addHandler(handler)
     root.setLevel(level)
     return root
@@ -138,13 +169,13 @@ def _main(argv: Optional[list[str]] = None) -> int:
     """
     setup_logging(force=True)
     log = get_logger("vroad_mlt.demo", run_id="lr-sweep__lr1e-4__20260620T101500Z")
-    log.info("entrenamiento iniciado", extra={"epoch": 0, "lr": 3e-4})
-    log.bind(epoch=1).info("época terminada", extra={"loss_total": 0.1234, "f1_global": 0.76})
-    log.warning("memoria GPU alta", extra={"gpu_mem_mb": 21500})
+    log.info("training started", extra={"epoch": 0, "lr": 3e-4})
+    log.bind(epoch=1).info("epoch finished", extra={"loss_total": 0.1234, "f1_global": 0.76})
+    log.warning("high GPU memory", extra={"gpu_mem_mb": 21500})
     try:
         1 / 0
     except ZeroDivisionError:
-        log.error("fallo de ejemplo", exc_info=True)
+        log.error("example failure", exc_info=True)
 
     print("---- fmt_decimal ----", file=sys.stderr)
     for v in (1e-4, 3e-4, 1e-6, 0.1234567, 1.0, 0.0):

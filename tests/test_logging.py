@@ -15,7 +15,7 @@ from vroad_mlt import logging as mlog
 def captured():
     """Configura logging a un buffer y devuelve un lector de las líneas JSON."""
     buf = io.StringIO()
-    mlog.setup_logging(level=logging.DEBUG, stream=buf, force=True)
+    mlog.setup_logging(level=logging.DEBUG, stream=buf, force=True, fmt="json")
 
     def lines():
         return [json.loads(ln) for ln in buf.getvalue().splitlines() if ln.strip()]
@@ -127,3 +127,39 @@ def test_fmt_decimal_no_scientific_notation(value, expected):
 def test_fmt_decimal_places_and_no_trim():
     assert mlog.fmt_decimal(3e-4, places=8) == "0.0003"
     assert mlog.fmt_decimal(0.5, places=4, trim=False) == "0.5000"
+
+
+# ------------------------------------------------------------- formato texto
+
+def test_text_format_basic():
+    buf = io.StringIO()
+    mlog.setup_logging(stream=buf, force=True, fmt="text")
+    mlog.get_logger("t").info("hello world")
+    out = buf.getvalue().strip()
+    assert out.startswith("[INFO] hello world")
+    mlog.setup_logging(force=True, stream=io.StringIO())
+
+
+def test_text_format_appends_extras():
+    buf = io.StringIO()
+    mlog.setup_logging(stream=buf, force=True, fmt="text")
+    mlog.get_logger("t", run_id="R1").info("split done", extra={"written": 20})
+    out = buf.getvalue().strip()
+    assert out.startswith("[INFO] split done")
+    assert "run_id=R1" in out and "written=20" in out
+    mlog.setup_logging(force=True, stream=io.StringIO())
+
+
+# ---------------------------------------------------------- selección de formato
+
+def test_resolve_fmt_explicit_and_env(monkeypatch):
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_EXECUTION", raising=False)
+    assert mlog._resolve_fmt(None) == "text"          # local por defecto
+    assert mlog._resolve_fmt("json") == "json"          # explícito gana
+    monkeypatch.setenv("CLOUD_RUN_JOB", "job-x")
+    assert mlog._resolve_fmt(None) == "json"            # Cloud Run -> json
+    monkeypatch.setenv("LOG_FORMAT", "text")
+    assert mlog._resolve_fmt(None) == "text"            # env LOG_FORMAT gana

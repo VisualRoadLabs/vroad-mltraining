@@ -1,0 +1,15 @@
+{
+  "manifest_id": "culane",
+  "version": "1",
+  "shard_maxcount": 10000,
+  "sources": [
+    {
+      "source": "public",
+      "dataset": "culane",
+      "version": "1",
+      "splits": ["train", "val", "test"],
+      "filters": {},
+      "dedup": true
+    }
+  ]
+}

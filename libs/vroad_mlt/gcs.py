@@ -39,12 +39,30 @@ class Gcs:
 
     # ------------------------------------------------------------- fábricas
     @classmethod
-    def from_project(cls, project: str, *, credentials: Any = None) -> "Gcs":
-        return cls(storage.Client(project=project, credentials=credentials))
+    def from_project(
+        cls, project: str, *, credentials: Any = None, pool_maxsize: Optional[int] = None
+    ) -> "Gcs":
+        client = storage.Client(project=project, credentials=credentials)
+        if pool_maxsize:
+            cls._enlarge_pool(client, pool_maxsize)
+        return cls(client)
 
     @classmethod
-    def from_settings(cls, settings: "Settings", *, credentials: Any = None) -> "Gcs":
-        return cls.from_project(settings.project_training, credentials=credentials)
+    def from_settings(
+        cls, settings: "Settings", *, credentials: Any = None, pool_maxsize: Optional[int] = None
+    ) -> "Gcs":
+        return cls.from_project(
+            settings.project_training, credentials=credentials, pool_maxsize=pool_maxsize
+        )
+
+    @staticmethod
+    def _enlarge_pool(client: "storage.Client", size: int) -> None:
+        """Sube el pool de conexiones HTTP (evita 'Connection pool is full' con descargas concurrentes)."""
+        import requests  # dep transitiva de google-cloud-storage
+
+        adapter = requests.adapters.HTTPAdapter(pool_connections=size, pool_maxsize=size)
+        client._http.mount("https://", adapter)
+        client._http.mount("http://", adapter)
 
     @property
     def client(self) -> "storage.Client":

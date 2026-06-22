@@ -24,7 +24,7 @@ from typing import Any, Optional
 from google.api_core import exceptions as gax  # type: ignore[import-untyped]
 
 from vroad_mlt import lines_format, naming
-from vroad_mlt.dataset_spec import Spec
+from vroad_mlt.dataset_spec import DEFAULT_SHARD_MAXCOUNT, Spec
 from vroad_mlt.datalake.assets import dedup_culane as dd
 from vroad_mlt.datalake.queries import build_images_query, label_uri_for_image
 from vroad_mlt.manifest import Manifest
@@ -160,6 +160,104 @@ def materialize(
     return manifest
 
 
+# --------------------------------------------------------------- benchmark CULane fijo
+
+# Las 9 categorías oficiales de CULane (deben coincidir con metric.CULANE_CATEGORIES; un test lo
+# verifica). No importamos `metric` aquí: arrastra cv2/scipy, que esta imagen NO instala.
+CULANE_CATEGORIES = ("normal", "crowd", "night", "noline", "shadow", "arrow", "dazzle", "curve", "cross")
+
+
+def culane_category(gcs_uri: str) -> str:
+    """Categoría de evaluación CULane desde la URI del Data Lake.
+
+    Estructura nativa de CULane en el DL para test:
+    `.../culane/<split>/<categoria>/images/<clip>/<frame>.jpg` → la categoría es el segmento JUSTO
+    antes de `/images/`. Valida contra las 9 oficiales (sale del test_split de CULane, no de la
+    clasificación del DL).
+    """
+    if "/images/" not in gcs_uri:
+        raise ValueError(f"URI sin '/images/': {gcs_uri!r}")
+    category = gcs_uri.split("/images/", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    if category not in CULANE_CATEGORIES:
+        raise ValueError(f"categoría CULane desconocida {category!r} en {gcs_uri!r} (válidas: {CULANE_CATEGORIES})")
+    return category
+
+
+def materialize_benchmark(
+    *,
+    bq: Any,
+    gcs: Any,
+    dl_project: str,
+    out_bucket: str,
+    tmp_dir: Any,
+    benchmark: str = "culane@v1",
+    source: str = "public",
+    dataset: str = "culane",
+    split: str = "test",
+    shard_maxcount: int = DEFAULT_SHARD_MAXCOUNT,
+    limit: Optional[int] = None,
+    workers: int = DEFAULT_WORKERS,
+    with_categories: bool = True,
+    log: Any = None,
+) -> dict:
+    """Materializa el benchmark fijo (`benchmarks/<benchmark>/<split>-NNNNN.tar`) y, si
+    `with_categories`, emite `categories.json` (key de sample → categoría CULane) EN LA MISMA PASADA.
+
+    Co-emitir garantiza que `categories.json` y las keys de los shards quedan ALINEADOS por
+    construcción (sin acoplamientos frágiles de orden). El `split=test` lleva categorías; `val` se
+    materializa con `--no-categories` (CULane solo etiqueta categorías en test).
+    """
+    sql, params = build_images_query(dl_project, source, dataset, split, {}, limit=limit)
+    uris = [row["gcs_uri"] for row in bq.query(sql, params)]
+
+    prefix = naming.benchmark_prefix(benchmark)  # benchmarks/<benchmark>
+
+    def _on_shard_done(path: Path, _prefix: str = prefix) -> None:
+        gcs.upload_file(naming.gs_uri(out_bucket, _prefix, path.name), path)
+        path.unlink(missing_ok=True)
+
+    out_dir = Path(tmp_dir) / benchmark.replace("@", "_")
+    writer = ShardWriter(out_dir, split, maxcount=shard_maxcount, on_shard_done=_on_shard_done)
+    categories: dict[str, str] = {}
+    written = skipped = 0
+    batch_size = max(workers * 8, 1)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        stop = False
+        for start in range(0, len(uris), batch_size):
+            if stop:
+                break
+            batch = uris[start:start + batch_size]
+            for uri, result in zip(batch, ex.map(lambda u: _download_one(gcs, u), batch)):
+                if limit is not None and written >= limit:
+                    stop = True
+                    break
+                if result is None:
+                    skipped += 1
+                    continue
+                image, lines = result
+                key = sample_key(written)
+                writer.write(key, image, lines)
+                if with_categories:
+                    categories[key] = culane_category(uri)
+                written += 1
+                if log and written % 5000 == 0:
+                    log.info("progress", extra={"split": split, "written": written})
+    writer.close()  # sube y borra el último shard
+
+    if with_categories:
+        cat_uri = naming.gs_uri(out_bucket, naming.benchmark_categories_key(benchmark))
+        gcs.write_json(cat_uri, categories, indent=2)
+        by_cat: dict[str, int] = {}
+        for c in categories.values():
+            by_cat[c] = by_cat.get(c, 0) + 1
+        if log:
+            log.info("categories written", extra={"uri": cat_uri, "n": len(categories), "by_cat": by_cat})
+    if log:
+        log.info("benchmark done", extra={"benchmark": benchmark, "split": split,
+                                          "written": written, "skipped": skipped, "shards": len(writer.shards)})
+    return {"written": written, "skipped": skipped, "categories": len(categories)}
+
+
 def _read_spec(spec_arg: str, cfg: Any) -> str:
     """Lee la spec desde una ruta local o una URI `gs://` (para Cloud Run)."""
     if spec_arg.startswith("gs://"):
@@ -173,16 +271,50 @@ def main(argv: Optional[list[str]] = None) -> int:
     from vroad_mlt.config import get_settings
     from vroad_mlt.logging import get_logger, setup_logging
 
-    ap = argparse.ArgumentParser(description="Materializa shards + manifiesto desde el Data Lake.")
-    ap.add_argument("--spec", required=True, help="ruta al JSON de la spec")
+    ap = argparse.ArgumentParser(description="Materializa shards/benchmark desde el Data Lake.")
+    ap.add_argument("--spec", default=None, help="ruta/URI del JSON de la spec (modo shards)")
+    ap.add_argument("--benchmark", default=None, help="materializa el benchmark fijo (p.ej. culane@v1)")
+    ap.add_argument("--source", default="public", help="(benchmark) source del Data Lake")
+    ap.add_argument("--dataset", default="culane", help="(benchmark) dataset")
+    ap.add_argument("--split", default="test", help="(benchmark) split a materializar")
+    ap.add_argument("--shard-maxcount", type=int, default=DEFAULT_SHARD_MAXCOUNT, help="(benchmark) samples/shard")
+    ap.add_argument("--no-categories", action="store_true", help="(benchmark) no emitir categories.json (p.ej. val)")
     ap.add_argument("--dry-run", action="store_true", help="solo imprime las consultas")
     ap.add_argument("--limit", type=int, default=None, help="máx. samples por split (pruebas)")
     ap.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="descargas GCS concurrentes")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
+    if bool(args.spec) == bool(args.benchmark):
+        ap.error("pasa exactamente uno de --spec (shards) o --benchmark (benchmark fijo)")
+
     setup_logging()
     log = get_logger("dataset-build")
     cfg = get_settings()
+
+    # --- Modo benchmark: benchmarks/<benchmark>/<split>-*.tar (+ categories.json en test) ---
+    if args.benchmark:
+        if args.dry_run:
+            sql, params = build_images_query(
+                cfg.project_datalake, args.source, args.dataset, args.split, {}, limit=args.limit
+            )
+            print(f"\n# benchmark {args.benchmark} [{args.split}]\n{sql}\nparams={params}")
+            return 0
+
+        from vroad_mlt.bq import BigQuery
+        from vroad_mlt.gcs import Gcs
+
+        bq = BigQuery.from_settings(cfg)
+        gcs = Gcs.from_settings(cfg, pool_maxsize=args.workers + 4)
+        with tempfile.TemporaryDirectory() as tmp:
+            materialize_benchmark(
+                bq=bq, gcs=gcs, dl_project=cfg.project_datalake, out_bucket=cfg.bucket_datasets,
+                tmp_dir=tmp, benchmark=args.benchmark, source=args.source, dataset=args.dataset,
+                split=args.split, shard_maxcount=args.shard_maxcount, limit=args.limit,
+                workers=args.workers, with_categories=not args.no_categories, log=log,
+            )
+        return 0
+
+    # --- Modo shards (spec) ---
     spec = Spec.from_json(_read_spec(args.spec, cfg))
 
     if args.dry_run:

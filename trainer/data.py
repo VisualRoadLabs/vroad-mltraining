@@ -46,7 +46,8 @@ def decode_sample(sample: Sample) -> dict:
         "image": img,
         "lanes": lanes,
         "slots": None,
-        "meta": {"key": sample.key, "timestamp": sample.lines.timestamp},
+        # `src_size` = (W, H) NATIVO (lo necesita la evaluación para mapear de vuelta con predict()).
+        "meta": {"key": sample.key, "timestamp": sample.lines.timestamp, "src_size": img.size},
     }
 
 

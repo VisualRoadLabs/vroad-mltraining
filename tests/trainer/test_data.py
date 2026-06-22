@@ -53,7 +53,7 @@ def test_decode_sample_image_and_lanes():
     assert out["image"].size == (64, 32)        # (W, H) nativos
     assert len(out["lanes"]) == 2
     assert np.array_equal(out["lanes"][0], np.array([[10, 20], [30, 40]], np.float32))
-    assert out["meta"] == {"key": "000000", "timestamp": 7}
+    assert out["meta"] == {"key": "000000", "timestamp": 7, "src_size": (64, 32)}
     assert out["slots"] is None
 
 
@@ -61,7 +61,9 @@ def test_decode_sample_preserves_any_resolution():
     # Varias resoluciones: cada imagen conserva su tamaño nativo (no se hardcodea).
     for w, h in [(1640, 590), (1280, 720), (800, 320)]:
         s = Sample(key="k", image=_jpg(w, h), lines=_lines([[(0, 0), (1, 1)]]))
-        assert td.decode_sample(s)["image"].size == (w, h)
+        out = td.decode_sample(s)
+        assert out["image"].size == (w, h)
+        assert out["meta"]["src_size"] == (w, h)  # (W, H) nativo, para la evaluación
 
 
 # ------------------------------------------------------------------- collate

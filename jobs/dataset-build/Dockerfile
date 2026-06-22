@@ -13,9 +13,8 @@ COPY pyproject.toml ./
 COPY libs/ ./libs/
 RUN pip install --no-cache-dir ".[gcp]" "numpy>=2"
 
-# Código del job + .env.example como config por defecto de dev (fallback de get_settings
-# si el Cloud Run Job no trae las variables de entorno).
-COPY .env.example ./
+# Código del job. La configuración (proyecto, buckets, SHA de lanetr, ...) se inyecta como
+# VARIABLES DE ENTORNO en el Cloud Run Job; NO se hornea ningún .env en la imagen.
 COPY jobs/dataset-build/ ./jobs/dataset-build/
 
 # La spec llega como argumento en la ejecución del job:

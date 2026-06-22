@@ -1,8 +1,11 @@
-"""vroad_mlt.logging — logging legible en consola (`[LEVEL] ...`) o JSON en Cloud Run.
+"""vroad_mlt.logging — logging legible `[LEVEL] mensaje  clave=valor` (o JSON opcional).
 
-Por defecto emite texto `[INFO] mensaje  clave=valor ...` (cómodo en local). En
-Cloud Run / Vertex (detectado por env, o `LOG_FORMAT=json`) emite una línea JSON por
-evento que Cloud Logging parsea (`severity`/`message`/`time` + el resto a `jsonPayload`).
+Por defecto emite TEXTO `[INFO] mensaje  clave=valor ...` (en local y en Cloud Run, para
+que se lea cómodo). Con `LOG_FORMAT=json` emite una línea JSON por evento
+(`severity`/`message`/`time` + campos), que Cloud Logging parsea para filtrar por severidad.
+
+En modo texto, INFO/DEBUG van a stdout y WARNING+ a stderr: así en Cloud Run los errores
+salen con severidad ERROR y el resto con INFO.
 
 Además trae `fmt_decimal`: los `loss_*`/`lr` del `train.log` se quieren en DECIMAL,
 sin notación científica (`1e-4` -> `0.0001`).
@@ -103,10 +106,12 @@ def _resolve_fmt(fmt: Optional[str]) -> str:
     env = os.environ.get("LOG_FORMAT")
     if env:
         return env.lower()
-    # Cloud Run / Vertex ponen estas variables -> allí JSON (Cloud Logging lo parsea).
-    if os.environ.get("K_SERVICE") or os.environ.get("CLOUD_RUN_JOB") or os.environ.get("CLOUD_RUN_EXECUTION"):
-        return "json"
-    return "text"
+    return "text"  # texto por defecto (también en Cloud Run); JSON solo con LOG_FORMAT=json
+
+
+def _mark(handler: logging.Handler) -> logging.Handler:
+    handler._vroad_handler = True  # type: ignore[attr-defined]
+    return handler
 
 
 def setup_logging(
@@ -116,22 +121,38 @@ def setup_logging(
     stream: Optional[TextIO] = None,
     force: bool = False,
 ) -> logging.Logger:
-    """Configura el logging a stdout. Idempotente. Llamar una vez al arrancar.
+    """Configura el logging. Idempotente. Llamar una vez al arrancar.
 
-    `fmt`: 'text' (`[LEVEL] ...`, por defecto en local) o 'json' (Cloud Run). Si es
-    None se autodetecta (env `LOG_FORMAT`, o variables de Cloud Run). `force=True`
-    reemplaza handlers (tests).
+    `fmt`: 'text' (`[LEVEL] ...`, por defecto) o 'json'. Si es None usa `LOG_FORMAT`
+    (o 'text'). En texto sin `stream`, INFO/DEBUG -> stdout y WARNING+ -> stderr.
+    `force=True` reemplaza handlers (tests).
     """
-    formatter = JsonFormatter() if _resolve_fmt(fmt) == "json" else TextFormatter()
+    resolved = _resolve_fmt(fmt)
     root = logging.getLogger()
     if force:
         for h in list(root.handlers):
             root.removeHandler(h)
+
     if not any(getattr(h, "_vroad_handler", False) for h in root.handlers):
-        handler = logging.StreamHandler(stream or sys.stdout)
-        handler.setFormatter(formatter)
-        handler._vroad_handler = True  # type: ignore[attr-defined]
-        root.addHandler(handler)
+        if resolved == "json":
+            h = logging.StreamHandler(stream or sys.stdout)
+            h.setFormatter(JsonFormatter())
+            root.addHandler(_mark(h))
+        elif stream is not None:
+            h = logging.StreamHandler(stream)
+            h.setFormatter(TextFormatter())
+            root.addHandler(_mark(h))
+        else:
+            formatter = TextFormatter()
+            out = logging.StreamHandler(sys.stdout)
+            out.setFormatter(formatter)
+            out.addFilter(lambda r: r.levelno < logging.WARNING)
+            root.addHandler(_mark(out))
+            err = logging.StreamHandler(sys.stderr)
+            err.setFormatter(formatter)
+            err.setLevel(logging.WARNING)
+            root.addHandler(_mark(err))
+
     root.setLevel(level)
     return root
 

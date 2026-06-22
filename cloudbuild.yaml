@@ -1,0 +1,115 @@
+# cloudbuild.yaml — visualroad-ml-training
+# Build genérico para las 7 imágenes, parametrizado por:
+#   _SERVICE  -> qué imagen se construye
+#   _DEPLOY   -> "false" en PR (solo test+build) | "true" en push a main (test+build+push+deploy)
+# El build corre como sa-cicd-deployer (se pasa con --service-account en el trigger).
+# Colocar este fichero como cloudbuild.yaml en la RAÍZ del repo.
+
+substitutions:
+  _SERVICE: ""                                  # dashboard|train-agent|trainer|dataset-build|eval-official|rag-index|lock-reconcile
+  _DEPLOY: "false"                              # lo fija el trigger (push=true, PR=false)
+  _REGION: "us-central1"
+  _AR_REPO: "ml-training"                       # repo de Artifact Registry (en este proyecto, vr-prj-dev-cicd-v1)
+  _PROJECT_TRAINING: "vr-prj-dev-training-v1"   # donde viven los Cloud Run y Vertex
+  _DATASETS_BUCKET: "bkt-dev-datasets-usc1"     # destino del config_schema.json del trainer
+
+options:
+  logging: CLOUD_LOGGING_ONLY                   # OBLIGATORIO al usar SA propia (igual que en el Data Lake)
+
+steps:
+  # 1) Resolver carpeta de contexto, tipo de recurso y URI de imagen según _SERVICE.
+  #    PROJECT_ID = proyecto del build = vr-prj-dev-cicd-v1 (donde está el Artifact Registry).
+  - id: resolve
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        case "${_SERVICE}" in
+          dashboard|train-agent)
+            echo "services/${_SERVICE}" > /workspace/ctx_dir; echo "service" > /workspace/kind ;;
+          dataset-build|eval-official|rag-index|lock-reconcile)
+            echo "jobs/${_SERVICE}" > /workspace/ctx_dir; echo "job" > /workspace/kind ;;
+          trainer)
+            echo "trainer" > /workspace/ctx_dir; echo "trainer" > /workspace/kind ;;
+          *)
+            echo "ERROR: _SERVICE desconocido: '${_SERVICE}'"; exit 1 ;;
+        esac
+        echo "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${SHORT_SHA}" > /workspace/image_uri
+        echo "servicio=${_SERVICE} contexto=$(cat /workspace/ctx_dir) tipo=$(cat /workspace/kind)"
+        echo "imagen=$(cat /workspace/image_uri) deploy=${_DEPLOY}"
+
+  # 2) Tests: instala el paquete vroad-mlt con sus extras y corre la suite completa (tests/).
+  #    Estructura real del repo: libs/ (paquete) + tests/ arriba + extras en pyproject (no hay
+  #    core/ ni requirements*.txt). El conformance pesado del modelo se ejecuta en el repo lanetr.
+  - id: test
+    name: python:3.12-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        pip install --quiet ".[dev,gcp,metric]"
+        python -m pytest -q tests
+
+  # 3) Build. Contexto = raíz del repo (".") para que el Dockerfile pueda COPIAR libs/ y core/.
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        CTX="$(cat /workspace/ctx_dir)"; IMAGE="$(cat /workspace/image_uri)"
+        docker build -f "${CTX}/Dockerfile" -t "${IMAGE}" .
+
+  # 4) Push (solo en push a main; en PR se queda en test+build).
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ "${_DEPLOY}" != "true" ]; then echo "PR (_DEPLOY=false): no se publica imagen"; exit 0; fi
+        docker push "$(cat /workspace/image_uri)"
+
+  # 5) Solo trainer: exporta config_schema.json del modelo pineado ejecutando la propia imagen.
+  - id: trainer-export-schema
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ "${_SERVICE}" != "trainer" ] || [ "${_DEPLOY}" != "true" ]; then echo "no aplica"; exit 0; fi
+        docker run --rm "$(cat /workspace/image_uri)" python -m trainer.export_schema > /workspace/config_schema.json
+        echo "schema exportado ($(wc -c < /workspace/config_schema.json) bytes)"
+
+  # 6) Deploy (solo en push a main):
+  #    service -> run services update | job -> run jobs update
+  #    trainer -> sube config_schema.json a _model/lanetr@<pin>/ (no actualiza Cloud Run)
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ "${_DEPLOY}" != "true" ]; then echo "PR (_DEPLOY=false): no se despliega"; exit 0; fi
+        KIND="$(cat /workspace/kind)"; IMAGE="$(cat /workspace/image_uri)"
+        case "${KIND}" in
+          service)
+            gcloud run services update "run-dev-${_SERVICE}-usc1" \
+              --image="${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
+          job)
+            gcloud run jobs update "job-dev-${_SERVICE}-usc1" \
+              --image="${IMAGE}" --region="${_REGION}" --project="${_PROJECT_TRAINING}" ;;
+          trainer)
+            PIN="$(cat trainer/lanetr_pin.txt)"
+            gcloud storage cp /workspace/config_schema.json \
+              "gs://${_DATASETS_BUCKET}/_model/lanetr@${PIN}/config_schema.json" ;;
+        esac
+
+timeout: 2400s

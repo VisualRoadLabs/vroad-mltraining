@@ -17,7 +17,7 @@ import io
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Optional, Union
+from typing import Callable, Iterable, Iterator, Mapping, Optional, Union
 
 from vroad_mlt import lines_format
 from vroad_mlt.lines_format import LinesFile
@@ -151,6 +151,7 @@ class ShardWriter:
         *,
         maxcount: int = 10000,
         digits: int = 5,
+        on_shard_done: Optional[Callable[[Path], None]] = None,
     ) -> None:
         validate_split(split)
         if maxcount < 1:
@@ -160,15 +161,24 @@ class ShardWriter:
         self.split = split
         self.maxcount = maxcount
         self.digits = digits
+        # Callback que se llama con la ruta de cada shald al CERRARSE (para subirlo y
+        # borrarlo, y no acumular todos los shards en disco/RAM).
+        self.on_shard_done = on_shard_done
         self.shards: list[Path] = []
         self.total = 0
         self._tar: Optional[tarfile.TarFile] = None
         self._in_shard = 0
         self._index = 0
 
-    def _roll(self) -> None:
+    def _finalize_current(self) -> None:
         if self._tar is not None:
             self._tar.close()
+            self._tar = None
+            if self.on_shard_done is not None:
+                self.on_shard_done(self.shards[-1])
+
+    def _roll(self) -> None:
+        self._finalize_current()
         path = self.out_dir / shard_name(self.split, self._index, digits=self.digits)
         self._tar = tarfile.open(path, "w")
         self.shards.append(path)
@@ -184,9 +194,7 @@ class ShardWriter:
         self.total += 1
 
     def close(self) -> None:
-        if self._tar is not None:
-            self._tar.close()
-            self._tar = None
+        self._finalize_current()
 
     def __enter__(self) -> "ShardWriter":
         return self

@@ -108,9 +108,17 @@ def materialize(
                     continue
                 candidates.append(u)
 
+            # Cada shard se SUBE a GCS y se BORRA del disco en cuanto se cierra: en Cloud Run el
+            # disco local es RAM, así no acumulamos ~10GB y el job no se queda sin memoria (OOM).
+            shards_prefix = naming.shards_prefix(src.dataset, src.version)
+
+            def _on_shard_done(path: Path, _prefix: str = shards_prefix) -> None:
+                gcs.upload_file(naming.gs_uri(out_bucket, _prefix, path.name), path)
+                path.unlink(missing_ok=True)
+
             # Descarga CONCURRENTE (cuello de botella = red); escritura secuencial al shard.
             out_dir = Path(tmp_dir) / f"{src.dataset}@{src.version}"
-            writer = ShardWriter(out_dir, split, maxcount=spec.shard_maxcount)
+            writer = ShardWriter(out_dir, split, maxcount=spec.shard_maxcount, on_shard_done=_on_shard_done)
             written = skipped = 0
             batch_size = max(workers * 8, 1)
             with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -131,11 +139,7 @@ def materialize(
                         written += 1
                         if log and written % 5000 == 0:
                             log.info("progress", extra={"dataset": src.dataset, "split": split, "written": written})
-            writer.close()
-
-            for shard in writer.shards:
-                key = naming.gs_uri(out_bucket, naming.shards_prefix(src.dataset, src.version), shard.name)
-                gcs.upload_file(key, shard)
+            writer.close()  # sube y borra el último shard
 
             counts[split] = counts.get(split, 0) + written
             if log:

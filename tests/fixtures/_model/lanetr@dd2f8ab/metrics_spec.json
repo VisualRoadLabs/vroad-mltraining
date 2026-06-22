@@ -1,0 +1,52 @@
+{
+  "f1/global": {
+    "label": "F1 global",
+    "higher_is_better": true,
+    "order": 0
+  },
+  "f1/curve": {
+    "label": "F1 curva",
+    "higher_is_better": true,
+    "order": 1
+  },
+  "loss/total": {
+    "label": "Loss total",
+    "higher_is_better": false,
+    "order": 2
+  },
+  "loss/cls": {
+    "label": "Loss cls",
+    "higher_is_better": false,
+    "order": 3
+  },
+  "loss/iou": {
+    "label": "Loss LaneIoU",
+    "higher_is_better": false,
+    "order": 4
+  },
+  "loss/xy": {
+    "label": "Loss xy",
+    "higher_is_better": false,
+    "order": 5
+  },
+  "loss/ext": {
+    "label": "Loss ext",
+    "higher_is_better": false,
+    "order": 6
+  },
+  "lr": {
+    "label": "LR",
+    "higher_is_better": null,
+    "order": 7
+  },
+  "gpu/mem_mb": {
+    "label": "GPU mem (MB)",
+    "higher_is_better": null,
+    "order": 8
+  },
+  "gpu/util": {
+    "label": "GPU util",
+    "higher_is_better": null,
+    "order": 9
+  }
+}

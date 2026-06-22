@@ -1,0 +1,324 @@
+[
+  {
+    "path": "arch.num_queries",
+    "type": "choice",
+    "choices": [
+      4,
+      12,
+      20
+    ],
+    "default": 12,
+    "group": "arch",
+    "label": "Nº queries",
+    "help": "Carriles candidatos (anchors/consultas)."
+  },
+  {
+    "path": "arch.num_decoder_layers",
+    "type": "int",
+    "default": 6,
+    "min": 1,
+    "max": 6,
+    "group": "arch",
+    "label": "Capas decoder",
+    "help": "Profundidad del decoder deformable."
+  },
+  {
+    "path": "arch.n_ref_points",
+    "type": "int",
+    "default": 4,
+    "min": 1,
+    "max": 4,
+    "group": "arch",
+    "label": "Puntos de referencia",
+    "help": "Puntos de la atención deformable a lo largo del carril (1 = centro)."
+  },
+  {
+    "path": "arch.ref_refine",
+    "type": "choice",
+    "choices": [
+      "xs",
+      "mlp"
+    ],
+    "default": "mlp",
+    "group": "arch",
+    "label": "Refinamiento de refs",
+    "help": "Refinamiento iterativo de referencias: mlp (DAB-DETR) o xs (deriva del xs predicho)."
+  },
+  {
+    "path": "arch.load_strict",
+    "type": "bool",
+    "default": true,
+    "group": "arch",
+    "label": "Carga estricta (FT)",
+    "help": "En fine-tuning, exige forma idéntica del checkpoint; si no, carga parcial."
+  },
+  {
+    "path": "optim.lr",
+    "type": "float",
+    "default": 0.0003,
+    "min": 0.0001,
+    "max": 0.001,
+    "group": "optim",
+    "label": "Learning rate",
+    "help": "LR base de AdamW (transformer/cabezas)."
+  },
+  {
+    "path": "optim.backbone_lr_mult",
+    "type": "float",
+    "default": 0.1,
+    "min": 0.05,
+    "max": 0.5,
+    "group": "optim",
+    "label": "Backbone LR ×",
+    "help": "Multiplicador del LR del backbone."
+  },
+  {
+    "path": "optim.weight_decay",
+    "type": "float",
+    "default": 0.0001,
+    "min": 0.0001,
+    "max": 0.01,
+    "group": "optim",
+    "label": "Weight decay",
+    "help": "Regularización de AdamW."
+  },
+  {
+    "path": "optim.grad_clip",
+    "type": "float",
+    "default": 0.1,
+    "min": 0.05,
+    "max": 1.0,
+    "group": "optim",
+    "label": "Grad clip",
+    "help": "Recorte de norma del gradiente."
+  },
+  {
+    "path": "optim.ema_decay",
+    "type": "float",
+    "default": 0.9999,
+    "min": 0.999,
+    "max": 0.9999,
+    "group": "optim",
+    "label": "EMA decay",
+    "help": "Momentum del EMA (= 1 − momentum)."
+  },
+  {
+    "path": "schedule.epochs",
+    "type": "int",
+    "default": 50,
+    "min": 15,
+    "max": 50,
+    "group": "schedule",
+    "label": "Épocas",
+    "help": "Épocas totales (15 ablation, 50 final)."
+  },
+  {
+    "path": "schedule.warmup_epochs",
+    "type": "int",
+    "default": 3,
+    "min": 1,
+    "max": 5,
+    "group": "schedule",
+    "label": "Warmup épocas",
+    "help": "Calentamiento lineal del LR."
+  },
+  {
+    "path": "schedule.scheduler",
+    "type": "choice",
+    "choices": [
+      "cosine",
+      "step",
+      "poly"
+    ],
+    "default": "cosine",
+    "group": "schedule",
+    "label": "Scheduler",
+    "help": "Tipo de decaimiento."
+  },
+  {
+    "path": "schedule.min_lr",
+    "type": "float",
+    "default": 1e-06,
+    "min": 1e-06,
+    "max": 1e-05,
+    "group": "schedule",
+    "label": "Min LR",
+    "help": "LR final del decaimiento."
+  },
+  {
+    "path": "loss.w_cls",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.5,
+    "max": 3.0,
+    "group": "loss",
+    "label": "w_cls",
+    "help": "Peso de la clasificación focal."
+  },
+  {
+    "path": "loss.w_iou",
+    "type": "float",
+    "default": 2.0,
+    "min": 1.0,
+    "max": 5.0,
+    "group": "loss",
+    "label": "w_iou",
+    "help": "Peso de la LaneIoU (ajuste de la línea)."
+  },
+  {
+    "path": "loss.w_xy",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.1,
+    "max": 2.0,
+    "group": "loss",
+    "label": "w_xy",
+    "help": "Peso del L1 lateral (x) fila a fila."
+  },
+  {
+    "path": "loss.w_ext",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.1,
+    "max": 2.0,
+    "group": "loss",
+    "label": "w_ext",
+    "help": "Peso de longitud/extremos (start_y, length)."
+  },
+  {
+    "path": "loss.focal_gamma",
+    "type": "float",
+    "default": 2.0,
+    "min": 1.0,
+    "max": 3.0,
+    "group": "loss",
+    "label": "focal γ",
+    "help": "Foco de la focal loss."
+  },
+  {
+    "path": "loss.cost_cls",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 3.0,
+    "group": "loss",
+    "label": "cost_cls",
+    "help": "Coste de clasificación del matcher húngaro."
+  },
+  {
+    "path": "loss.cost_iou",
+    "type": "float",
+    "default": 2.0,
+    "min": 0.0,
+    "max": 5.0,
+    "group": "loss",
+    "label": "cost_iou",
+    "help": "Coste LaneIoU del matcher húngaro."
+  },
+  {
+    "path": "loss.cost_xy",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 2.0,
+    "group": "loss",
+    "label": "cost_xy",
+    "help": "Coste lateral del matcher húngaro."
+  },
+  {
+    "path": "loss.aux_loss",
+    "type": "bool",
+    "default": true,
+    "group": "loss",
+    "label": "Aux loss",
+    "help": "Pérdidas auxiliares en capas intermedias."
+  },
+  {
+    "path": "data.dataset_manifest",
+    "type": "str",
+    "default": "culane@1",
+    "group": "data",
+    "label": "Dataset (manifiesto)",
+    "help": "Qué dataset/mezcla (id@versión)."
+  },
+  {
+    "path": "data.batch_size",
+    "type": "int",
+    "default": 32,
+    "min": 16,
+    "max": 32,
+    "group": "data",
+    "label": "Batch size",
+    "help": "Tamaño de batch (A100/L4 según el tier)."
+  },
+  {
+    "path": "data.num_workers",
+    "type": "int",
+    "default": 8,
+    "min": 4,
+    "max": 16,
+    "group": "data",
+    "label": "Num workers",
+    "help": "Hilos del dataloader."
+  },
+  {
+    "path": "data.seed",
+    "type": "int",
+    "default": 42,
+    "min": 0,
+    "max": 999999,
+    "group": "data",
+    "label": "Seed",
+    "help": "Semilla (varianza/reproducibilidad)."
+  },
+  {
+    "path": "data.aug.hflip_prob",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 0.5,
+    "group": "data",
+    "label": "Flip H prob",
+    "help": "Probabilidad de volteo horizontal."
+  },
+  {
+    "path": "data.aug.rotation_deg",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": 10.0,
+    "group": "data",
+    "label": "Rotación (°)",
+    "help": "Rotación aleatoria (ayuda a curvas)."
+  },
+  {
+    "path": "data.aug.scale_jitter",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": 0.2,
+    "group": "data",
+    "label": "Scale jitter",
+    "help": "Escala aleatoria ±."
+  },
+  {
+    "path": "data.aug.brightness",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": 0.4,
+    "group": "data",
+    "label": "Brillo",
+    "help": "Jitter de brillo (Night/Dazzle/Shadow)."
+  },
+  {
+    "path": "data.aug.contrast",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": 0.4,
+    "group": "data",
+    "label": "Contraste",
+    "help": "Jitter de contraste (Night/Dazzle/Shadow)."
+  }
+]

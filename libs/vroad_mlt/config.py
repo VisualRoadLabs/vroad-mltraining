@@ -284,9 +284,19 @@ def get_settings(
     environ: Optional[Mapping[str, str]] = None,
     require_lanetr: bool = True,
 ) -> Settings:
-    """Devuelve la configuración (cacheada). `reload=True` la recalcula."""
+    """Devuelve la configuración (cacheada). `reload=True` la recalcula.
+
+    Comodidad de dev: si el `.env` no existe pero sí `.env.example`, usa ese (en
+    Cloud Run/Vertex mandan las variables de entorno reales, no el fichero).
+    """
     global _cached
     if _cached is None or reload:
+        if (
+            env_file is not None
+            and not Path(env_file).exists()
+            and Path(".env.example").exists()
+        ):
+            env_file = ".env.example"
         _cached = Settings.from_env(
             env_file=env_file, environ=environ, require_lanetr=require_lanetr
         )

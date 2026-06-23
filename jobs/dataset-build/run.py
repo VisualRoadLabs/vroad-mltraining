@@ -165,6 +165,8 @@ def materialize(
 # Las 9 categorías oficiales de CULane (deben coincidir con metric.CULANE_CATEGORIES; un test lo
 # verifica). No importamos `metric` aquí: arrastra cv2/scipy, que esta imagen NO instala.
 CULANE_CATEGORIES = ("normal", "crowd", "night", "noline", "shadow", "arrow", "dazzle", "curve", "cross")
+# El Data Lake conserva los nombres de CARPETA NATIVOS de CULane; 'hlight' es nuestra 'dazzle'.
+_DL_CATEGORY_ALIAS = {"hlight": "dazzle"}
 
 
 def culane_category(gcs_uri: str) -> str:
@@ -172,14 +174,15 @@ def culane_category(gcs_uri: str) -> str:
 
     Estructura nativa de CULane en el DL para test:
     `.../culane/<split>/<categoria>/images/<clip>/<frame>.jpg` → la categoría es el segmento JUSTO
-    antes de `/images/`. Valida contra las 9 oficiales (sale del test_split de CULane, no de la
-    clasificación del DL).
+    antes de `/images/` (con la carpeta nativa `hlight` mapeada a `dazzle`). Valida contra las 9
+    oficiales (sale del test_split de CULane, no de la clasificación del DL).
     """
     if "/images/" not in gcs_uri:
         raise ValueError(f"URI sin '/images/': {gcs_uri!r}")
-    category = gcs_uri.split("/images/", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    raw = gcs_uri.split("/images/", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    category = _DL_CATEGORY_ALIAS.get(raw, raw)
     if category not in CULANE_CATEGORIES:
-        raise ValueError(f"categoría CULane desconocida {category!r} en {gcs_uri!r} (válidas: {CULANE_CATEGORIES})")
+        raise ValueError(f"categoría CULane desconocida {raw!r} en {gcs_uri!r} (válidas: {CULANE_CATEGORIES})")
     return category
 
 
@@ -221,28 +224,30 @@ def materialize_benchmark(
     categories: dict[str, str] = {}
     written = skipped = 0
     batch_size = max(workers * 8, 1)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        stop = False
-        for start in range(0, len(uris), batch_size):
-            if stop:
-                break
-            batch = uris[start:start + batch_size]
-            for uri, result in zip(batch, ex.map(lambda u: _download_one(gcs, u), batch)):
-                if limit is not None and written >= limit:
-                    stop = True
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            stop = False
+            for start in range(0, len(uris), batch_size):
+                if stop:
                     break
-                if result is None:
-                    skipped += 1
-                    continue
-                image, lines = result
-                key = sample_key(written)
-                writer.write(key, image, lines)
-                if with_categories:
-                    categories[key] = culane_category(uri)
-                written += 1
-                if log and written % 5000 == 0:
-                    log.info("progress", extra={"split": split, "written": written})
-    writer.close()  # sube y borra el último shard
+                batch = uris[start:start + batch_size]
+                for uri, result in zip(batch, ex.map(lambda u: _download_one(gcs, u), batch)):
+                    if limit is not None and written >= limit:
+                        stop = True
+                        break
+                    if result is None:
+                        skipped += 1
+                        continue
+                    image, lines = result
+                    key = sample_key(written)
+                    writer.write(key, image, lines)
+                    if with_categories:
+                        categories[key] = culane_category(uri)
+                    written += 1
+                    if log and written % 5000 == 0:
+                        log.info("progress", extra={"split": split, "written": written})
+    finally:
+        writer.close()  # sube y borra el último shard (también si falla -> libera el .tar abierto)
 
     if with_categories:
         cat_uri = naming.gs_uri(out_bucket, naming.benchmark_categories_key(benchmark))

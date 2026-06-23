@@ -30,7 +30,8 @@ from vroad_mlt import naming
 from vroad_mlt.contract import ConfigSchema
 from vroad_mlt.manifest import Manifest, ManifestLock
 
-from trainer import config, data, eval as ev, loop, sinks
+from trainer import config, data, sinks
+from trainer import evaluation as ev, training as loop
 
 __all__ = ["RunSpec", "run_training", "resolve_shards", "step_event", "f1_event", "experiment_fields", "main"]
 

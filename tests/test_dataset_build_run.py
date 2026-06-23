@@ -157,6 +157,9 @@ def _add_bench_image(gcs, i, cat, clip="driver_100"):
 def test_culane_category_from_uri():
     u = "gs://bkt-prod-public-usc1/culane/test/night/images/driver_100/05250325_0272.jpg"
     assert run.culane_category(u) == "night"
+    # el DL usa la carpeta NATIVA 'hlight' -> nuestra categoría canónica es 'dazzle'
+    h = "gs://bkt-prod-public-usc1/culane/test/hlight/images/driver_100_30frame/05250538_0313.MP4/02940.jpg"
+    assert run.culane_category(h) == "dazzle"
 
 
 def test_culane_category_rejects_unknown_and_no_images():

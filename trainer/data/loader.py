@@ -1,4 +1,4 @@
-"""trainer.data — dataloader: shards WebDataset -> entrada del modelo (800×320) + targets.
+"""trainer.data.loader — dataloader: shards WebDataset -> entrada del modelo (800×320) + targets.
 
 Por cada sample del shard (`.jpg` + `.lines.json` en formato común) se construye un dict estilo
 `lanetr` y se le aplica la transformación de `lanetr` (recorta el cielo, redimensiona a 800×320,
@@ -27,7 +27,25 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from vroad_mlt import webdataset_io
 from vroad_mlt.webdataset_io import Sample
 
-__all__ = ["decode_sample", "collate", "LaneShardDataset", "build_transform", "make_loader"]
+__all__ = ["decode_sample", "collate", "LaneShardDataset", "build_transform", "make_loader",
+           "GcsClientFactory"]
+
+
+class GcsClientFactory:
+    """Crea un cliente GCS por worker del DataLoader. PICKLABLE (a diferencia de un `lambda`).
+
+    En Windows (`spawn`) y en Python 3.14+ (`forkserver`) el dataset se SERIALIZA hacia cada worker,
+    así que el `gcs_factory` debe poder picklearse (un lambda local no). Además `google-cloud-storage`
+    no es fork/spawn-safe → conviene un cliente NUEVO por worker.
+    """
+
+    def __init__(self, project: str) -> None:
+        self.project = project
+
+    def __call__(self):
+        from vroad_mlt.gcs import Gcs  # noqa: PLC0415 - perezoso (extra `gcp`)
+
+        return Gcs.from_project(self.project)
 
 # Transformación estilo lanetr: muta `sample` (image->tensor, añade targets) y lo devuelve.
 Transform = Callable[[dict, random.Random], dict]

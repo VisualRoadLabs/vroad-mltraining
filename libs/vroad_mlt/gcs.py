@@ -57,12 +57,27 @@ class Gcs:
 
     @staticmethod
     def _enlarge_pool(client: "storage.Client", size: int) -> None:
-        """Sube el pool de conexiones HTTP (evita 'Connection pool is full' con descargas concurrentes)."""
+        """Sube el pool de conexiones HTTP (evita 'Connection pool is full' con descargas concurrentes).
+
+        Cubre la sesión de DATOS (storage.googleapis.com) y la sesión de AUTH separada
+        (oauth2.googleapis.com, refresco de token): esta última tiene su propio pool por defecto (10),
+        que se llena con muchos hilos y emite los WARNING de 'Connection pool is full'.
+        """
         import requests  # dep transitiva de google-cloud-storage
 
-        adapter = requests.adapters.HTTPAdapter(pool_connections=size, pool_maxsize=size)
-        client._http.mount("https://", adapter)
-        client._http.mount("http://", adapter)
+        def _mount(session: Any) -> None:
+            adapter = requests.adapters.HTTPAdapter(pool_connections=size, pool_maxsize=size)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+        http = client._http
+        _mount(http)
+        # La sesión de auth (refresco de token) es independiente del `_http` de datos.
+        auth_session = getattr(http, "_auth_request_session", None) or getattr(
+            getattr(http, "_auth_request", None), "session", None
+        )
+        if auth_session is not None and hasattr(auth_session, "mount"):
+            _mount(auth_session)
 
     @property
     def client(self) -> "storage.Client":

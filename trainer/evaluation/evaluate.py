@@ -1,4 +1,4 @@
-"""trainer.eval — evaluación por época: predicciones -> formato común -> métrica nuestra.
+"""trainer.evaluation.evaluate — evaluación por época: predicciones -> formato común -> métrica.
 
 CAPA 1 (primaria, la vara de medir): NUESTRA métrica F1 (port de CLRNet, validada == C++) sobre el
 benchmark CULane FIJO (`benchmarks/culane@v1/`, todo a 1640×590), con desglose en las 9 categorías

@@ -19,7 +19,7 @@ from vroad_mlt.dataset_spec import Spec
 from vroad_mlt.webdataset_io import read_shard
 
 # Cargar run.py por ruta (jobs/dataset-build/ no es un paquete importable).
-_RUN_PATH = Path(__file__).parents[1] / "jobs" / "dataset-build" / "run.py"
+_RUN_PATH = Path(__file__).parents[3] / "jobs" / "dataset-build" / "run.py"
 _spec = importlib.util.spec_from_file_location("dataset_build_run", _RUN_PATH)
 run = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run)

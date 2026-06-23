@@ -10,7 +10,7 @@ import pytest
 from vroad_mlt import config as cfgmod
 from vroad_mlt.config import ConfigError, Settings, parse_env_file
 
-REPO_ROOT = Path(__file__).parents[1]
+REPO_ROOT = Path(__file__).parents[2]  # tests/libs/ -> raíz del repo
 
 # Entorno mínimo válido (solo lo requerido); el resto usa defaults/derivaciones.
 MINIMAL = {

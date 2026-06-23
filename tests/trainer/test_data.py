@@ -117,6 +117,13 @@ def test_dataset_iterates_multiple_shards():
     assert sum(1 for _ in ds) == 5
 
 
+def test_gcs_client_factory_is_picklable():
+    import pickle
+    f = td.GcsClientFactory("vr-prj-dev-training-v1")
+    restored = pickle.loads(pickle.dumps(f))   # debe poder serializarse (Windows spawn / forkserver)
+    assert restored.project == "vr-prj-dev-training-v1"
+
+
 def test_dataset_shuffle_is_deterministic_per_epoch():
     uris = [f"gs://b/shards/train-{i:05d}.tar" for i in range(8)]
     ds = td.LaneShardDataset(uris, lambda: None, _fake_transform, shuffle=True, seed=1, epoch=0)

@@ -1,4 +1,4 @@
-"""Tests de la evaluación del trainer (trainer.eval).
+"""Tests de la evaluación del trainer (trainer.evaluation).
 
 Sin lanetr: el `predict` (fake, devuelve formato común) y la `transform` se inyectan; usa la MÉTRICA
 REAL (vroad_mlt.metric, numpy/scipy/cv2) sobre carriles sintéticos, shards reales (webdataset_io) y
@@ -14,7 +14,7 @@ import pytest
 import torch
 from PIL import Image
 
-from trainer import eval as te
+from trainer import evaluation as te
 from vroad_mlt import lines_format, webdataset_io
 
 

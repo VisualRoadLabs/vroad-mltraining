@@ -1,4 +1,4 @@
-"""Tests del mecanismo del loop de entrenamiento (trainer.loop).
+"""Tests del mecanismo del loop de entrenamiento (trainer.training.loop).
 
 Usa torch (CPU) con un modelo/criterion DUMMY — sin lanetr. Verifica EMA, scheduler y que una
 época entrena de verdad (params cambian, EMA y scheduler avanzan). El modelo real (lanetr) se
@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from trainer.loop import ModelEMA, build_scheduler, train_epoch
+from trainer.training.loop import ModelEMA, build_scheduler, train_epoch
 
 
 # ----------------------------------------------------------------- ModelEMA

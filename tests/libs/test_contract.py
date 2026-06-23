@@ -20,7 +20,7 @@ from vroad_mlt.contract import (
     ParamSpec,
 )
 
-FIX = Path(__file__).parent / "fixtures" / "_model" / "lanetr@dd2f8ab"
+FIX = Path(__file__).parents[1] / "fixtures" / "_model" / "lanetr@dd2f8ab"
 
 
 @pytest.fixture

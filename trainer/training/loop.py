@@ -1,4 +1,4 @@
-"""trainer.loop — construir el modelo y entrenar una época (la receta de LaneTR).
+"""trainer.training.loop — construir el modelo y entrenar una época (la receta de LaneTR).
 
 Receta (portada de tu repo de investigación + CLAUDE §14): AdamW con LR por grupos
 (backbone 0.1×, módulos "lentos" 0.1×, resto 1×), scheduler warmup lineal + cosine, EMA con

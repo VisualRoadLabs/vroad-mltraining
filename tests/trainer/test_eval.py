@@ -49,8 +49,8 @@ class FakeGcs:
     def __init__(self, store):
         self.store = store
 
-    def read_bytes(self, uri):
-        return self.store[uri]
+    def open_stream(self, uri):
+        return io.BytesIO(self.store[uri])  # file-like seekable + context manager
 
 
 # ----------------------------------------------------------- to_lines_file

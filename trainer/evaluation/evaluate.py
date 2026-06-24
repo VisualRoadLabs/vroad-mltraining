@@ -24,7 +24,6 @@ Testeable sin `lanetr`: el callable `predict` y la `transform` se INYECTAN; en r
 
 from __future__ import annotations
 
-import io
 import random
 from typing import Any, Callable, Optional, Sequence
 
@@ -93,13 +92,14 @@ class EvalShardDataset(IterableDataset):
         gcs = self.gcs_factory()
         rng = random.Random(0)  # eval: sin augment; el rng queda inerte
         for uri in self.shard_uris:
-            data = gcs.read_bytes(uri)
-            for sample in webdataset_io.read_shard(io.BytesIO(data)):
-                decoded = decode_sample(sample)
-                src_w, src_h = decoded["image"].size  # (W, H) nativo, ANTES de transformar
-                out = self.transform(decoded, rng)
-                meta = {"key": sample.key, "timestamp": sample.lines.timestamp, "src_size": (src_w, src_h)}
-                yield out["image"], sample.lines, meta  # GT = LinesFile original (no mutado)
+            # STREAMING: lee el shard miembro a miembro desde GCS (no lo vuelca entero a RAM).
+            with gcs.open_stream(uri) as stream:
+                for sample in webdataset_io.read_shard(stream):
+                    decoded = decode_sample(sample)
+                    src_w, src_h = decoded["image"].size  # (W, H) nativo, ANTES de transformar
+                    out = self.transform(decoded, rng)
+                    meta = {"key": sample.key, "timestamp": sample.lines.timestamp, "src_size": (src_w, src_h)}
+                    yield out["image"], sample.lines, meta  # GT = LinesFile original (no mutado)
 
 
 def make_eval_loader(

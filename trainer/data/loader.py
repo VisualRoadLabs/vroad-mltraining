@@ -120,10 +120,11 @@ class LaneShardDataset(IterableDataset):
         wid = 0 if info is None else info.id
         rng = random.Random(self.seed + self.epoch * 1000 + wid)
         for uri in self._shards_for_worker():
-            data = gcs.read_bytes(uri)
-            for sample in webdataset_io.read_shard(io.BytesIO(data)):
-                out = self.transform(decode_sample(sample), rng)
-                yield out["image"], out["targets"], out["meta"]
+            # STREAMING: lee el shard miembro a miembro desde GCS (no lo vuelca entero a RAM).
+            with gcs.open_stream(uri) as stream:
+                for sample in webdataset_io.read_shard(stream):
+                    out = self.transform(decode_sample(sample), rng)
+                    yield out["image"], out["targets"], out["meta"]
 
 
 def build_transform(cfg: dict, split: str) -> Transform:

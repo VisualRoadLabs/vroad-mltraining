@@ -108,6 +108,15 @@ class Gcs:
     def read_bytes(self, uri: str) -> bytes:
         return self._blob(uri).download_as_bytes()
 
+    def open_stream(self, uri: str):
+        """Lector en STREAMING del objeto (NO carga el objeto entero en RAM).
+
+        Devuelve un file-like seekable (`BlobReader`) que descarga por trozos bajo demanda; sirve
+        para leer un shard `.tar` miembro a miembro con `webdataset_io.read_shard` sin volcarlo a
+        memoria. Úsalo como context manager (`with gcs.open_stream(uri) as f: ...`).
+        """
+        return self._blob(uri).open("rb")
+
     def read_text(self, uri: str) -> str:
         return self.read_bytes(uri).decode("utf-8")
 

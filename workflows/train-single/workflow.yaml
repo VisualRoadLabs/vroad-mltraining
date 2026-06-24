@@ -40,7 +40,7 @@ main:
           - tensorboard: "tb-dev-lanetr-usc1"
           - image: ${"us-central1-docker.pkg.dev/vr-prj-dev-cicd-v1/ml-training/trainer:" + input.image_tag}
           - run_id: ${input.run_id}
-          - machine: ${if(input.accelerator == "NVIDIA_TESLA_A100", "a2-highgpu-1g", "g2-standard-12")}
+          - machine: ${default(map.get(input, "machine"), if(input.accelerator == "NVIDIA_TESLA_A100", "a2-highgpu-1g", "g2-standard-12"))}
           - tb_log_dir: ${"gs://" + staging_bucket + "/tensorboard/" + run_id + "/"}
           - base_output: ${"gs://" + staging_bucket + "/jobs/" + run_id + "/"}
 
@@ -350,9 +350,37 @@ build_trainer_args:
           value: ov
           in: ${default(map.get(input, "overrides"), [])}
           steps:
-            - add:
+            - add_override:
                 assign:
                   - cmd_args: ${list.concat(cmd_args, ["--set", ov])}
+    - opt_eval_every:
+        switch:
+          - condition: ${map.get(input, "eval_every") != null}
+            steps:
+              - add_ee:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--eval-every", string(input.eval_every)])}
+    - opt_max_epochs:
+        switch:
+          - condition: ${map.get(input, "max_epochs") != null}
+            steps:
+              - add_me:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-epochs", string(input.max_epochs)])}
+    - opt_max_train_steps:
+        switch:
+          - condition: ${map.get(input, "max_train_steps") != null}
+            steps:
+              - add_mts:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-train-steps", string(input.max_train_steps)])}
+    - opt_max_eval_batches:
+        switch:
+          - condition: ${map.get(input, "max_eval_batches") != null}
+            steps:
+              - add_meb:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-eval-batches", string(input.max_eval_batches)])}
     - ret:
         return: ${cmd_args}
 

@@ -20,10 +20,19 @@ gcp = ["google-cloud-storage>=2.10", "google-cloud-bigquery>=3.11"]
 # La métrica de CULane (port fiel del F1 oficial == C++).
 # scipy>=1.13 para compatibilidad ABI con numpy 2.x.
 metric = ["numpy>=2", "scipy>=1.13", "opencv-python-headless"]
+# El trainer (Vertex Custom Job). torch viene en la imagen base; lanetr se instala pineado por SHA
+# (trainer/lanetr_pin.txt). Aquí lo que NO trae la base: tracker de Vertex + YAML de la config +
+# Pillow (el dataloader decodifica imágenes con PIL).
+trainer = ["google-cloud-aiplatform>=1.40", "pyyaml>=6", "pillow>=10"]
 
 [tool.setuptools.packages.find]
 where = ["libs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# import-mode=importlib + pythonpath="." : permite ficheros de test con el mismo nombre en
+# carpetas distintas (tests/libs/test_config.py vs tests/trainer/test_config.py) y carpetas con
+# guion (tests/jobs/dataset-build/), sin necesidad de __init__.py en tests/. `.` pone la raíz del
+# repo en sys.path para `import trainer` (vroad_mlt va por el editable install de libs/).
+addopts = "-q --import-mode=importlib"
+pythonpath = ["."]

@@ -10,7 +10,7 @@ from vroad_mlt import config_resolve as cr
 from vroad_mlt.config_resolve import ConfigResolveError
 from vroad_mlt.contract import ConfigSchema, ContractError
 
-FIX = Path(__file__).parent / "fixtures" / "_model" / "lanetr@dd2f8ab"
+FIX = Path(__file__).parents[1] / "fixtures" / "_model" / "lanetr@dd2f8ab"
 
 
 @pytest.fixture

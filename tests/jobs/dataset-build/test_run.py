@@ -19,7 +19,7 @@ from vroad_mlt.dataset_spec import Spec
 from vroad_mlt.webdataset_io import read_shard
 
 # Cargar run.py por ruta (jobs/dataset-build/ no es un paquete importable).
-_RUN_PATH = Path(__file__).parents[1] / "jobs" / "dataset-build" / "run.py"
+_RUN_PATH = Path(__file__).parents[3] / "jobs" / "dataset-build" / "run.py"
 _spec = importlib.util.spec_from_file_location("dataset_build_run", _RUN_PATH)
 run = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run)
@@ -142,3 +142,68 @@ def test_materialize_culane_dedup(tmp_path):
 def test_sample_key():
     assert run.sample_key(0) == "00000000"
     assert run.sample_key(42) == "00000042"
+
+
+# ---------------------------------------------------------------- benchmark CULane
+
+def _add_bench_image(gcs, i, cat, clip="driver_100"):
+    """Imagen de test CULane en el DL: `.../culane/test/<cat>/images/<clip>/<frame>.jpg`."""
+    img = f"gs://bkt-prod-public-usc1/culane/test/{cat}/images/{clip}/{i:05d}.jpg"
+    gcs.store[img] = f"IMG{i}".encode()
+    gcs.store[img.replace("/images/", "/label/").replace(".jpg", ".lines.json")] = GT
+    return {"image_id": f"id{i}", "gcs_uri": img, "width": 1640, "height": 590}
+
+
+def test_culane_category_from_uri():
+    u = "gs://bkt-prod-public-usc1/culane/test/night/images/driver_100/05250325_0272.jpg"
+    assert run.culane_category(u) == "night"
+    # el DL usa la carpeta NATIVA 'hlight' -> nuestra categoría canónica es 'dazzle'
+    h = "gs://bkt-prod-public-usc1/culane/test/hlight/images/driver_100_30frame/05250538_0313.MP4/02940.jpg"
+    assert run.culane_category(h) == "dazzle"
+
+
+def test_culane_category_rejects_unknown_and_no_images():
+    with pytest.raises(ValueError, match="desconocida"):
+        run.culane_category("gs://b/culane/test/foobar/images/c/0.jpg")
+    with pytest.raises(ValueError, match="sin '/images/'"):
+        run.culane_category("gs://b/culane/test/night/0.jpg")
+
+
+def test_culane_categories_match_metric():
+    from vroad_mlt import metric
+    assert run.CULANE_CATEGORIES == metric.CULANE_CATEGORIES  # mismo conjunto y orden
+
+
+def test_materialize_benchmark_writes_shards_and_categories(tmp_path):
+    gcs = FakeGcs()
+    rows = [_add_bench_image(gcs, 0, "normal"),
+            _add_bench_image(gcs, 1, "night"),
+            _add_bench_image(gcs, 2, "curve")]
+    bq = FakeBq({("culane", "test"): rows})
+    res = run.materialize_benchmark(bq=bq, gcs=gcs, dl_project="P", out_bucket=OUT,
+                                    tmp_dir=tmp_path, benchmark="culane@v1", split="test", shard_maxcount=2)
+    assert res == {"written": 3, "skipped": 0, "categories": 3}
+
+    # shards bajo benchmarks/culane@v1/ (maxcount=2 -> 2 shards)
+    bench_shards = sorted(u for u in gcs.store if "/benchmarks/culane@v1/" in u and u.endswith(".tar"))
+    assert [u.split("/")[-1] for u in bench_shards] == ["test-00000.tar", "test-00001.tar"]
+
+    # categories.json: key de sample -> categoría, alineado por construcción
+    cats = json.loads(gcs.store[f"gs://{OUT}/benchmarks/culane@v1/categories.json"])
+    assert cats == {"00000000": "normal", "00000001": "night", "00000002": "curve"}
+
+    # las keys de categories.json son EXACTAMENTE las de los shards
+    keys = set()
+    for u in bench_shards:
+        keys |= {s.key for s in read_shard(io.BytesIO(gcs.store[u]))}
+    assert keys == set(cats)
+
+
+def test_materialize_benchmark_no_categories_for_val(tmp_path):
+    gcs = FakeGcs()
+    bq = FakeBq({("culane", "val"): [_add_image(gcs, 0)]})  # val: sin categorías
+    res = run.materialize_benchmark(bq=bq, gcs=gcs, dl_project="P", out_bucket=OUT, tmp_dir=tmp_path,
+                                    benchmark="culane@v1", split="val", with_categories=False)
+    assert res["categories"] == 0
+    assert not any("categories.json" in u for u in gcs.store)
+    assert any("/benchmarks/culane@v1/val-00000.tar" in u for u in gcs.store)

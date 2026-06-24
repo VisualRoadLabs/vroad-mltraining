@@ -10,7 +10,7 @@ import pytest
 from vroad_mlt import lines_format as lf
 from vroad_mlt.lines_format import LinesFile, LinesFormatError, Point
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parents[1] / "fixtures"  # tests/fixtures (compartidas)
 
 
 # --------------------------------------------------------------------- válidos

@@ -1,0 +1,451 @@
+# wf-dev-train-single-usc1 — punto de entrada de "crear entrenamiento" con ADMISIÓN POR LOCK.
+#
+# Orquesta (CLAUDE §23/§39): reclama un lock de GPU en GCS (compare-and-swap atómico con
+# ifGenerationMatch=0, SIN servicios nuevos) -> marca tbl_experiments=RUNNING -> crea el Vertex
+# Custom Job del trainer y espera -> marca SUCCEEDED/FAILED -> LIBERA el lock (también si falla).
+#
+# Lo invoca el dashboard (sa-mlt-dashboard, roles/workflows.invoker). Corre como sa-mlt-workflow.
+# NO es Python: se valida al desplegar (`gcloud workflows deploy`) y se prueba ejecutándolo.
+# Las constantes de entorno (proyecto/buckets/SA) van baked aquí (dev); el resto llega en `input`.
+#
+# input (lo pasa el dashboard):
+#   run_id       string  study__variant__<ts>
+#   study        string
+#   variant      string
+#   manifest     string  "<id>@<version>"
+#   run_kind     string  scratch | finetune | eval
+#   overrides    list    ["optim.lr=1e-4", ...]   (los --set)
+#   accelerator  string  NVIDIA_L4 | NVIDIA_TESLA_A100
+#   image_tag    string  tag de la imagen trainer en Artifact Registry (git sha)
+#   parent_ckpt  string  (opcional) gs://.../best.pth en finetune
+#   experiment   string  (opcional) Vertex Experiment
+
+main:
+  params: [input]
+  steps:
+    - config:
+        assign:
+          - project: "vr-prj-dev-training-v1"
+          - region: "us-central1"
+          - project_cicd: "vr-prj-dev-cicd-v1"
+          - project_datalake: "vr-prj-prod-data-v1"
+          - datasets_bucket: "bkt-dev-datasets-usc1"
+          - workdirs_bucket: "bkt-dev-training-workdirs-usc1"
+          - handoff_bucket: "bkt-dev-training-handoff-usc1"
+          - staging_bucket: "bkt-dev-vertex-staging-usc1"
+          - bq_dataset: "ds_experiments"
+          - sa_trainer: "sa-mlt-trainer@vr-prj-dev-training-v1.iam.gserviceaccount.com"
+          - lanetr_repo: "https://github.com/VisualRoadLabs/vroad-lanetr"
+          - lanetr_sha: "dd2f8ab"
+          - tensorboard: "tb-dev-lanetr-usc1"
+          - image: ${"us-central1-docker.pkg.dev/vr-prj-dev-cicd-v1/ml-training/trainer:" + input.image_tag}
+          - run_id: ${input.run_id}
+          - machine: ${default(map.get(input, "machine"), if(input.accelerator == "NVIDIA_TESLA_A100", "a2-highgpu-1g", "g2-standard-12"))}
+          - tb_log_dir: ${"gs://" + staging_bucket + "/tensorboard/" + run_id + "/"}
+          - base_output: ${"gs://" + staging_bucket + "/jobs/" + run_id + "/"}
+
+    # --- 1) Admisión: reclamar un slot de GPU (lock CAS en GCS) ---
+    - claim:
+        call: claim_gpu_lock
+        args:
+          bucket: ${staging_bucket}
+          accelerator: ${input.accelerator}
+          run_id: ${run_id}
+        result: lock_key
+    - check_admission:
+        switch:
+          - condition: ${lock_key == ""}
+            return:
+              status: "REJECTED"
+              reason: ${"No hay slot de GPU libre para " + input.accelerator}
+              run_id: ${run_id}
+
+    # --- 2) tbl_experiments = RUNNING (la fila base que el trainer luego completa) ---
+    - mark_running:
+        call: bq_start_row
+        args:
+          project: ${project}
+          dataset: ${bq_dataset}
+          input: ${input}
+
+    # --- 3) Crear el Vertex Custom Job y esperar; pase lo que pase, liberar el lock ---
+    - build_args:
+        call: build_trainer_args
+        args:
+          input: ${input}
+        result: trainer_args
+    - build_env:
+        call: build_trainer_env
+        args:
+          run_id: ${run_id}
+          experiment: ${default(map.get(input, "experiment"), "")}
+          tensorboard: ${tb_log_dir}
+          parent_ckpt: ${default(map.get(input, "parent_ckpt"), "")}
+          cfg:
+            project: ${project}
+            project_cicd: ${project_cicd}
+            project_datalake: ${project_datalake}
+            datasets_bucket: ${datasets_bucket}
+            workdirs_bucket: ${workdirs_bucket}
+            handoff_bucket: ${handoff_bucket}
+            staging_bucket: ${staging_bucket}
+            region: ${region}
+            bq_dataset: ${bq_dataset}
+            lanetr_repo: ${lanetr_repo}
+            lanetr_sha: ${lanetr_sha}
+            tensorboard: ${tensorboard}
+        result: trainer_env
+    - train:
+        try:
+          steps:
+            - create_job:
+                call: http.post
+                args:
+                  url: ${"https://" + region + "-aiplatform.googleapis.com/v1/projects/" + project + "/locations/" + region + "/customJobs"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    displayName: ${run_id}
+                    jobSpec:
+                      serviceAccount: ${sa_trainer}
+                      baseOutputDirectory:
+                        outputUriPrefix: ${base_output}
+                      workerPoolSpecs:
+                        - replicaCount: 1
+                          machineSpec:
+                            machineType: ${machine}
+                            acceleratorType: ${input.accelerator}
+                            acceleratorCount: 1
+                          containerSpec:
+                            imageUri: ${image}
+                            command: ["python", "-m", "trainer.run"]
+                            args: ${trainer_args}
+                            env: ${trainer_env}
+                result: job
+            - wait_job:
+                call: poll_custom_job
+                args:
+                  region: ${region}
+                  name: ${job.body.name}
+                result: final_state
+            - mark_final:
+                call: bq_finish_row
+                args:
+                  project: ${project}
+                  dataset: ${bq_dataset}
+                  run_id: ${run_id}
+                  status: ${final_state}
+        except:
+          as: e
+          steps:
+            - mark_failed:
+                call: bq_finish_row
+                args:
+                  project: ${project}
+                  dataset: ${bq_dataset}
+                  run_id: ${run_id}
+                  status: "FAILED"
+            - release_on_error:
+                call: release_gpu_lock
+                args:
+                  bucket: ${staging_bucket}
+                  key: ${lock_key}
+            - rethrow:
+                raise: ${e}
+
+    # --- 4) Liberar el lock (camino feliz) ---
+    - release:
+        call: release_gpu_lock
+        args:
+          bucket: ${staging_bucket}
+          key: ${lock_key}
+    - done:
+        return:
+          status: "DONE"
+          run_id: ${run_id}
+          job: ${job.body.name}
+          final_state: ${final_state}
+          lock: ${lock_key}
+
+
+# ------------------------------------------------------------------ subworkflows
+
+# Reclama un slot de GPU con CAS (ifGenerationMatch=0). Devuelve la key del lock o "" si está lleno.
+claim_gpu_lock:
+  params: [bucket, accelerator, run_id]
+  steps:
+    - slots:
+        switch:
+          - condition: ${accelerator == "NVIDIA_TESLA_A100"}
+            assign:
+              - keys: ["locks/a100.lock"]
+          - condition: true
+            assign:
+              - keys: ["locks/l4/slot-0.lock", "locks/l4/slot-1.lock", "locks/l4/slot-2.lock"]
+    - payload:
+        assign:
+          - body:
+              run_id: ${run_id}
+              who: "wf-dev-train-single"
+              claimed_at: ${sys.now()}
+    - try_each:
+        for:
+          value: key
+          in: ${keys}
+          steps:
+            - attempt:
+                try:
+                  call: http.request
+                  args:
+                    method: POST
+                    url: ${"https://storage.googleapis.com/upload/storage/v1/b/" + bucket + "/o"}
+                    auth:
+                      type: OAuth2
+                    query:
+                      uploadType: "media"
+                      name: ${key}
+                      ifGenerationMatch: "0"
+                    headers:
+                      Content-Type: "application/json"
+                    body: ${body}
+                  result: ok
+                except:
+                  as: e
+                  steps:
+                    - taken_or_error:
+                        switch:
+                          - condition: ${e.code == 412}   # ya ocupado -> probar siguiente slot
+                            next: continue
+                    - rethrow_real:
+                        raise: ${e}                         # otro error real -> propaga
+            - claimed:
+                return: ${key}
+    - full:
+        return: ""
+
+# Borra el objeto-lock (libera el slot). Tolera fallos (no debe tumbar el cierre).
+release_gpu_lock:
+  params: [bucket, key]
+  steps:
+    - delete:
+        try:
+          call: http.request
+          args:
+            method: DELETE
+            url: ${"https://storage.googleapis.com/storage/v1/b/" + bucket + "/o/" + text.url_encode(key)}
+            auth:
+              type: OAuth2
+        except:
+          as: e
+          steps:
+            - ignore:
+                return: "release-failed-ignored"
+    - ok:
+        return: "released"
+
+# Espera a que el Custom Job termine. Devuelve "SUCCEEDED" o "FAILED".
+poll_custom_job:
+  params: [region, name]
+  steps:
+    - loop:
+        for:
+          value: i
+          range: [1, 100000]
+          steps:
+            - get_state:
+                call: http.get
+                args:
+                  url: ${"https://" + region + "-aiplatform.googleapis.com/v1/" + name}
+                  auth:
+                    type: OAuth2
+                result: job
+            - check:
+                switch:
+                  - condition: ${job.body.state == "JOB_STATE_SUCCEEDED"}
+                    return: "SUCCEEDED"
+                  - condition: ${job.body.state in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"]}
+                    return: "FAILED"
+            - wait:
+                call: sys.sleep
+                args:
+                  seconds: 30
+    - timeout:
+        return: "FAILED"
+
+# Crea la fila base de tbl_experiments con estado RUNNING (las columnas REQUIRED).
+bq_start_row:
+  params: [project, dataset, input]
+  steps:
+    - merge:
+        call: http.post
+        args:
+          url: ${"https://bigquery.googleapis.com/bigquery/v2/projects/" + project + "/queries"}
+          auth:
+            type: OAuth2
+          body:
+            useLegacySql: false
+            parameterMode: "NAMED"
+            query: ${"MERGE `" + project + "." + dataset + ".tbl_experiments` T USING (SELECT @run_id AS run_id) S ON T.run_id = S.run_id WHEN NOT MATCHED THEN INSERT (run_id, study, variant, run_kind, status, started_at) VALUES (@run_id, @study, @variant, @run_kind, 'RUNNING', CURRENT_TIMESTAMP()) WHEN MATCHED THEN UPDATE SET status='RUNNING'"}
+            queryParameters:
+              - name: "run_id"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${input.run_id}
+              - name: "study"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${input.study}
+              - name: "variant"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${input.variant}
+              - name: "run_kind"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${input.run_kind}
+    - ok:
+        return: "ok"
+
+# Cierra la fila: estado final (SUCCEEDED/FAILED) + ended_at.
+bq_finish_row:
+  params: [project, dataset, run_id, status]
+  steps:
+    - merge:
+        call: http.post
+        args:
+          url: ${"https://bigquery.googleapis.com/bigquery/v2/projects/" + project + "/queries"}
+          auth:
+            type: OAuth2
+          body:
+            useLegacySql: false
+            parameterMode: "NAMED"
+            query: ${"UPDATE `" + project + "." + dataset + ".tbl_experiments` SET status=@status, ended_at=CURRENT_TIMESTAMP() WHERE run_id=@run_id"}
+            queryParameters:
+              - name: "run_id"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${run_id}
+              - name: "status"
+                parameterType:
+                  type: "STRING"
+                parameterValue:
+                  value: ${status}
+    - ok:
+        return: "ok"
+
+# Construye los args del contenedor (--study/--variant/--manifest/--run-kind + --set por cada override).
+build_trainer_args:
+  params: [input]
+  steps:
+    - base:
+        assign:
+          - cmd_args: '${["--study", input.study, "--variant", input.variant, "--manifest", input.manifest, "--run-kind", input.run_kind]}'
+    - overrides:
+        for:
+          value: ov
+          in: ${default(map.get(input, "overrides"), [])}
+          steps:
+            - add_override:
+                assign:
+                  - cmd_args: ${list.concat(cmd_args, ["--set", ov])}
+    - opt_eval_every:
+        switch:
+          - condition: ${map.get(input, "eval_every") != null}
+            steps:
+              - add_ee:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--eval-every", string(input.eval_every)])}
+    - opt_max_epochs:
+        switch:
+          - condition: ${map.get(input, "max_epochs") != null}
+            steps:
+              - add_me:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-epochs", string(input.max_epochs)])}
+    - opt_max_train_steps:
+        switch:
+          - condition: ${map.get(input, "max_train_steps") != null}
+            steps:
+              - add_mts:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-train-steps", string(input.max_train_steps)])}
+    - opt_max_eval_batches:
+        switch:
+          - condition: ${map.get(input, "max_eval_batches") != null}
+            steps:
+              - add_meb:
+                  assign:
+                    - cmd_args: ${list.concat(cmd_args, ["--max-eval-batches", string(input.max_eval_batches)])}
+    - ret:
+        return: ${cmd_args}
+
+# Construye el env del contenedor (lista {name,value}); en Vertex no hay .env en la imagen.
+build_trainer_env:
+  params: [run_id, experiment, tensorboard, parent_ckpt, cfg]
+  steps:
+    - base:
+        assign:
+          - environ:
+              - name: "RUN_ID"
+                value: ${run_id}
+              - name: "TENSORBOARD_LOG_DIR"
+                value: ${tensorboard}
+              - name: "PROJECT_TRAINING"
+                value: ${cfg.project}
+              - name: "PROJECT_CICD"
+                value: ${cfg.project_cicd}
+              - name: "PROJECT_DATALAKE"
+                value: ${cfg.project_datalake}
+              - name: "GCP_REGION"
+                value: ${cfg.region}
+              - name: "AR_HOST"
+                value: "us-central1-docker.pkg.dev"
+              - name: "AR_REPO"
+                value: "ml-training"
+              - name: "LANETR_REPO"
+                value: ${cfg.lanetr_repo}
+              - name: "LANETR_SHA"
+                value: ${cfg.lanetr_sha}
+              - name: "BUCKET_DATASETS"
+                value: ${cfg.datasets_bucket}
+              - name: "BUCKET_WORKDIRS"
+                value: ${cfg.workdirs_bucket}
+              - name: "BUCKET_HANDOFF"
+                value: ${cfg.handoff_bucket}
+              - name: "BUCKET_VERTEX_STAGING"
+                value: ${cfg.staging_bucket}
+              - name: "DATALAKE_IMAGES_PUBLIC"
+                value: "bkt-prod-public-usc1"
+              - name: "DATALAKE_IMAGES_USER"
+                value: "bkt-prod-user-usc1"
+              - name: "BQ_DATASET_EXPERIMENTS"
+                value: ${cfg.bq_dataset}
+              - name: "VERTEX_TENSORBOARD"
+                value: ${cfg.tensorboard}
+    - add_experiment:
+        switch:
+          - condition: ${experiment != ""}
+            steps:
+              - add_exp:
+                  assign:
+                    - exp_entry:
+                        name: "VERTEX_EXPERIMENT"
+                        value: ${experiment}
+                    - environ: ${list.concat(environ, [exp_entry])}
+    - add_parent:
+        switch:
+          - condition: ${parent_ckpt != ""}
+            steps:
+              - add_par:
+                  assign:
+                    - par_entry:
+                        name: "PARENT_CKPT"
+                        value: ${parent_ckpt}
+                    - environ: ${list.concat(environ, [par_entry])}
+    - ret:
+        return: ${environ}

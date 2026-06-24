@@ -55,9 +55,10 @@ steps:
         # libs de sistema para OpenCV (lo usa la métrica/test_metric); el resto son wheels.
         apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
         # torch CPU (los tests del trainer: loop/eval/sinks) desde el índice de PyTorch, en su propia
-        # llamada para no traerse la build CUDA (~2GB). pyyaml lo usa trainer.run (config.yaml).
+        # llamada para no traerse la build CUDA (~2GB). pyyaml -> trainer.run (config.yaml);
+        # pillow -> el dataloader del trainer (PIL). aiplatform NO: en tests el tracker se inyecta.
         pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-        pip install --quiet ".[dev,gcp,metric]" pyyaml
+        pip install --quiet ".[dev,gcp,metric]" pyyaml pillow
         python -m pytest -q tests
 
   # 3) Build. Contexto = raíz del repo (".") para que el Dockerfile pueda COPIAR libs/.

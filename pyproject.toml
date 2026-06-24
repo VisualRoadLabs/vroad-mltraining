@@ -21,8 +21,9 @@ gcp = ["google-cloud-storage>=2.10", "google-cloud-bigquery>=3.11"]
 # scipy>=1.13 para compatibilidad ABI con numpy 2.x.
 metric = ["numpy>=2", "scipy>=1.13", "opencv-python-headless"]
 # El trainer (Vertex Custom Job). torch viene en la imagen base; lanetr se instala pineado por SHA
-# (trainer/lanetr_pin.txt). Aquí solo lo que NO trae la base: tracker de Vertex + YAML de la config.
-trainer = ["google-cloud-aiplatform>=1.40", "pyyaml>=6"]
+# (trainer/lanetr_pin.txt). Aquí lo que NO trae la base: tracker de Vertex + YAML de la config +
+# Pillow (el dataloader decodifica imágenes con PIL).
+trainer = ["google-cloud-aiplatform>=1.40", "pyyaml>=6", "pillow>=10"]
 
 [tool.setuptools.packages.find]
 where = ["libs"]
